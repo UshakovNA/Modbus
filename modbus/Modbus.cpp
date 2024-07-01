@@ -7,45 +7,70 @@
 
 LOG_INIT;
 
-uint16_t regs_1[5]{};
-uint16_t regs_2[5]{};
-uint16_t regs_3[5]{};
+uint16_t    regs_1[5]{};
+uint16_t    regs_2[5]{};
+uint16_t    regs_3[5]{};
 
-int8_t  Modbus::initRdRegsReq(Modbus::Req_1& req, uint8_t slave, uint8_t func, uint16_t addr, uint16_t n_regs, uint16_t* reg_buf){
-    uint16_t _tmp=0;
+uint16_t    wr_reg1 = 0xff00;
+
+int8_t  Modbus::initRdRegsReq(Modbus::Req_1& req, uint8_t slave, uint8_t func, uint16_t addr, uint16_t n, uint16_t* reg_buf){
+    uint16_t _tmp = addr;
     req.slave     = slave;
     req.func      = func;
-    _tmp = addr;
     req.addr      = (_tmp<<8)+(_tmp>>8);          // register address
-    _tmp = n_regs;
+    _tmp = n;
     req.param     = (_tmp<<8)+(_tmp>>8);          // number of registers
     req.crc       = crc((uint8_t*)&req, 6);
     req.regs      = reg_buf;
     return 0;
 }
 
+int8_t  Modbus::initWrRegReq(Modbus::Req_1& req, uint8_t slave, uint8_t func, uint16_t addr, uint16_t* reg){
+    uint16_t _tmp = addr;
+    req.slave     = slave;
+    req.func      = func;
+    req.addr      = (_tmp<<8)+(_tmp>>8);          // register address
+    req.param     = 0;                            // value
+    req.crc       = 0;
+    req.regs      = reg;
+    return 0;
+}
+
 void Modbus::init(){
-    initRdRegsReq(req_1,1,3,40960,5,regs_1);
-    initRdRegsReq(req_2,1,3,40970,5,regs_2);
+    //--- read 5 regiters
+    // initRdRegsReq(req_1,1,3,40960,5,regs_1);
+    //--- read 11 coils
+    initRdRegsReq(req_1,1,2,14336,11,regs_1);
+
+    // initRdRegsReq(req_2,1,3,40970,5,regs_2);
+
+    //--- read 5 regiters
     initRdRegsReq(req_3,1,3,40975,5,regs_3);
     req_1.en = true;
-    req_2.en = true;
+    // req_2.en = true;
     req_3.en = true;
+
+    //--- write 1 register
+    // initWrRegReq(req_2,1,6,41984,&wr_reg1);
+    //--- write 1 coil
+    initWrRegReq(req_2,1,5,15360,&wr_reg1);
+
     return; 
 }
 
 void Modbus::task(){
-    send();
+    // send();
     receive();
 }
 void Modbus::task100ms(){ }
 void Modbus::task1s(){ 
     // DEBUG - slow send
-    // static int8_t cnt=0;
-    // if(cnt>=2){ 
-    //     cnt=0;
-    //     send(); 
-    // } else { cnt++; }
+    static int8_t cnt=0;
+    if(cnt>=2){ 
+        cnt=0;
+        req_2.en = true;
+        send(); 
+    } else { cnt++; }
 }
                   
 void Modbus::reset_alr(){
@@ -56,12 +81,17 @@ void Modbus::reset_alr(){
     }
 }
 
-int8_t Modbus::onReadRegs(uint16_t* regs, int16_t len){
-    printf("read regs:\t");
+int8_t Modbus::onReadRegs(int8_t n_req, uint16_t* regs, int16_t len){
+    printf("read regs(%d):\t", n_req);
     for(int16_t i=0;i<len;i++){
         printf("%02d\t", regs[i]);
     }
     printf("\n");
+    return 0;
+}
+int8_t  Modbus::onWriteReg(int8_t n_req, uint16_t val){
+    printf("write reg(%d) OK: %d\n", n_req, val);
+    // wr_reg1++;
     return 0;
 }
 
@@ -74,30 +104,47 @@ int8_t Modbus::send(){
 
     if(cur_req_n>=REQ_N) cur_req_n = 0;
     p_cur_req = p_req_que[cur_req_n];
+    // pass disabled req
+    while(!p_cur_req->en){ 
+        cur_req_n++; 
+        if(cur_req_n>=REQ_N) return 3;
+    }
+
     bool next = false;
-    if(!p_cur_req->en){ next = true; }
-    else {
-        switch(p_cur_req->func){
-            case 3:
-            case 4:
-            case 5:
-            case 6: {
-                LOG_DEBUG("req send %d", cur_req_n);
-                // DEBUG
-                // uint8_t* ptr = (uint8_t*)p_cur_req;
-                // for(size_t i=0;i<8;i++){ printf("%02x\t", *ptr++); }
-                // printf("\n");
-                port.send((uint8_t*)p_cur_req, 8);
-                clock_gettime(CLOCK_MONOTONIC_RAW, &tm_sent);
-                wait = true;
-                } break;
-            default: 
-                LOG_ERROR("req function not implemented");
-                p_cur_req->mb_err = 0x10;
-                next = true;
-                ret = 2;
-                break;
-        }
+    bool send = false;
+    switch(p_cur_req->func){
+        case 1:
+        case 2:{
+            // DEBUG
+            uint8_t* ptr = (uint8_t*)p_cur_req;
+            for(size_t i=0;i<8;i++){ printf("%02x\t", *ptr++); }
+            printf("\n");
+            }
+        case 3:
+        case 4:{
+            LOG_DEBUG("read req(%d) send", cur_req_n);
+            send = true;
+            } break;
+        case 5:
+        case 6: {
+            LOG_DEBUG("write req(%d) send (single register)", cur_req_n);
+            uint16_t _tmp = p_cur_req->regs[0];
+            p_cur_req->param = (_tmp<<8)+(_tmp>>8);          // write value
+            p_cur_req->crc   = crc((uint8_t*)p_cur_req, 6);
+            p_cur_req->en = false;
+            send = true;
+            } break;
+        default: 
+            LOG_ERROR("req(%d) function not implemented", cur_req_n);
+            p_cur_req->mb_err = 0x10;
+            next = true;
+            ret = 4;
+            break;
+    }
+    if(send){
+        port.send((uint8_t*)p_cur_req, 8);
+        clock_gettime(CLOCK_MONOTONIC_RAW, &tm_sent);
+        wait = true;
     }
     // next request
     if(next){ cur_req_n++; }
@@ -129,6 +176,8 @@ Modbus::ErrInfo Modbus::getErr(uint8_t* rd_buf){
             case 4:  
                     byte_len = rd_buf[2];
                 break;
+            case 1:
+            case 2:
             case 5:
             case 6: 
             case 15: 
@@ -188,11 +237,24 @@ int8_t Modbus::receive(){
         if(last_err==CmmErrorType::None){
             int8_t rd_func = buf[1];
             switch(rd_func){
+                case 1:
+                case 2:{
+                    printf("----------- bits read OK: %d\t %02x\t %02x\n", buf[2], buf[3], buf[4]);
+                    } break;
                 case 3:
                 case 4:{
                     // int16_t len = swap16(p_cur_req->param);
                     getMbRegs(&buf[3],buf[2],p_cur_req->regs);
-                    onReadRegs(p_cur_req->regs, buf[2]/2);
+                    onReadRegs(cur_req_n, p_cur_req->regs, buf[2]/2);
+                    } break;
+                case 5:{
+                    printf("----------- bit write OK: %d\n", wr_reg1>0);
+                    if(wr_reg1){wr_reg1=0;} else{wr_reg1=0xff00;}
+                    } break;
+                case 6:{
+                    int16_t val = (buf[4]<<8)+buf[5];
+                    p_cur_req->regs[0] = val;
+                    onWriteReg(cur_req_n, val);
                     } break;
                 default: break;
             }
@@ -205,7 +267,7 @@ int8_t Modbus::receive(){
     if(next){
         cur_req_n++; 
         wait = 0;
-        LOG_TRACE("NEXT req");
+        LOG_TRACE("NEXT req(%d)", cur_req_n);
     }
     return 0;
 }

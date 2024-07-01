@@ -72,9 +72,11 @@ private:
     };
     ErrInfo getErr(uint8_t* rd_buf);
     int8_t  getMbRegs(uint8_t* buf, int16_t n_bytes, uint16_t* dest);
-    int8_t  initRdRegsReq(Modbus::Req_1& req, uint8_t slave, uint8_t func, uint16_t addr, uint16_t n_regs, uint16_t* reg_buf);
+    int8_t  initRdRegsReq(Modbus::Req_1& req, uint8_t slave, uint8_t func, uint16_t addr, uint16_t n, uint16_t* reg_buf);
+    int8_t  initWrRegReq(Modbus::Req_1& req, uint8_t slave, uint8_t func, uint16_t addr, uint16_t* reg);
 
-    int8_t  onReadRegs(uint16_t* regs, int16_t len);
+    int8_t  onReadRegs(int8_t n_req, uint16_t* regs, int16_t len);
+    int8_t  onWriteReg(int8_t n_req, uint16_t val);
 
     timespec    tm_sent{};
 };
